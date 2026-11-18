@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KeyWatch — Exposed Key Monitor</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #121821;
+      --border: #1f2a37;
+      --text: #d7e0ea;
+      --muted: #7d8ea3;
+      --green: #2ecc71;
+      --red: #e74c3c;
+      --amber: #f1c40f;
+      --accent: #4aa3ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 24px 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 16px;
+    }
+    h1 { font-size: 20px; margin: 0; letter-spacing: 0.04em; }
+    .sub { color: var(--muted); font-size: 12px; }
+    main { padding: 24px 28px 60px; max-width: 1400px; margin: 0 auto; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+    }
+    .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .card .value { font-size: 28px; margin-top: 6px; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+      align-items: center;
+    }
+    input[type="search"], select {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 13px;
+      min-width: 220px;
+    }
+    button {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+    }
+    button:hover { border-color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:hover td { background: rgba(74, 163, 255, 0.04); }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge.verified { background: rgba(46, 204, 113, 0.12); color: var(--green); }
+    .badge.unverified { background: rgba(231, 76, 60, 0.12); color: var(--red); }
+    .mono { font-family: inherit; color: var(--muted); }
+    .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .foot { margin-top: 18px; color: var(--muted); font-size: 11px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KeyWatch</h1>
+    <span class="sub">exposed key monitor · last updated <span id="generated">—</span></span>
+  </header>
+
+  <main>
+    <section class="stats" id="stats"></section>
+
+    <div class="controls">
+      <input id="search" type="search" placeholder="filter by domain, detector…">
+      <select id="verifiedFilter">
+        <option value="all">all findings</option>
+        <option value="verified">verified only</option>
+        <option value="unverified">unverified only</option>
+      </select>
+      <button id="refresh">refresh</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>domain</th>
+          <th>detector</th>
+          <th>preview</th>
+          <th>status</th>
+          <th>found</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none;">no findings yet — the first scan may still be running.</div>
+    <div class="foot">Keys are truncated to the first 10 characters. Full secrets are never displayed.</div>
+  </main>
+
+  <script>
+    let state = { findings: [] };
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function renderStats(stats) {
+      const el = document.getElementById("stats");
+      el.innerHTML = `
+        <div class="card"><div class="label">domains scanned</div><div class="value">${stats.scanned_total ?? 0}</div></div>
+        <div class="card"><div class="label">findings</div><div class="value">${stats.findings_total ?? 0}</div></div>
+        <div class="card"><div class="label">verified live</div><div class="value">${stats.verified_total ?? 0}</div></div>
+      `;
+    }
+
+    function renderRows() {
+      const q = document.getElementById("search").value.toLowerCase().trim();
+      const mode = document.getElementById("verifiedFilter").value;
+      const rows = document.getElementById("rows");
+
+      const filtered = state.findings.filter(f => {
+        if (mode === "verified" && !f.verified) return false;
+        if (mode === "unverified" && f.verified) return false;
+        if (!q) return true;
+        return `${f.domain} ${f.detector}`.toLowerCase().includes(q);
+      });
+
+      rows.innerHTML = filtered.map(f => `
+        <tr>
+          <td><a href="https://${esc(f.domain)}" target="_blank" rel="noopener">${esc(f.domain)}</a></td>
+          <td class="mono">${esc(f.detector)}</td>
+          <td class="mono">${esc(f.preview)}</td>
+          <td><span class="badge ${f.verified ? "verified" : "unverified"}">${f.verified ? "verified" : "unverified"}</span></td>
+          <td class="mono">${esc((f.found_at || "").replace("T", " ").replace("Z", ""))}</td>
+        </tr>
+      `).join("");
+
+      document.getElementById("empty").style.display = filtered.length ? "none" : "block";
+    }
+
+    async function load() {
+      const res = await fetch("/api/results");
+      const data = await res.json();
+      state.findings = data.findings || [];
+      renderStats(data.stats || {});
+      document.getElementById("generated").textContent = data.generated_at
+        ? data.generated_at.replace("T", " ").replace("Z", " UTC")
+        : "never";
+      renderRows();
+    }
+
+    document.getElementById("search").addEventListener("input", renderRows);
+    document.getElementById("verifiedFilter").addEventListener("change", renderRows);
+    document.getElementById("refresh").addEventListener("click", load);
+    load();
+    setInterval(load, 60000);
+  </script>
+</body>
+  </html>
