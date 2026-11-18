@@ -32,7 +32,7 @@ jobs:
           TLDS: 'com,dev,io,app,co'
           HOURS: '24'
           MAX_DOMAINS: '150'
-        run: python scraper.py
+        run: python scanner.py
 
       - name: Commit results
         run: |
